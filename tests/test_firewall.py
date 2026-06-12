@@ -5,7 +5,7 @@ from agent_firewall import (
     AgentFirewall,
     Intent,
     FirewallBlockedException,
-    protect,
+    protect_ingress,
     LLMScanner
 )
 
@@ -144,7 +144,7 @@ def test_middleware_protection(mock_scanner):
 
     firewall = AgentFirewall(scanner=mock_scanner)
 
-    @protect(firewall=firewall)
+    @protect_ingress(firewall=firewall)
     def my_agent_function(prompt: str):
         return f"Processed: {prompt}"
 
@@ -160,7 +160,7 @@ def test_middleware_custom_extractor(mock_scanner):
     def extract_from_dict(*args, **kwargs):
         return args[0].get("user_message", "")
 
-    @protect(firewall=firewall, extract_input=extract_from_dict)
+    @protect_ingress(firewall=firewall, extract_input=extract_from_dict)
     def complex_agent_call(payload: dict):
         return "Success"
 

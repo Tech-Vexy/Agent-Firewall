@@ -2,13 +2,14 @@ from functools import wraps
 from typing import Callable, Any
 from .firewall import AgentFirewall
 
-def protect(
+def protect_ingress(
     firewall: AgentFirewall,
     extract_input: Callable[..., str] = None,
     extract_session_id: Callable[..., str | None] = None
 ):
     """
-    A generic Python decorator (middleware) to protect a function.
+    A generic Python decorator (middleware) to protect an ingress function (e.g., handling user prompts).
+    This will run both the modular INGRESS rules and the LLM scanner.
 
     Args:
         firewall: An instance of AgentFirewall.
@@ -42,15 +43,92 @@ def protect(
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
-            # 1. Extract the text/code and session_id to analyze
             text_to_scan = extractor(*args, **kwargs)
             session_id = session_extractor(*args, **kwargs)
 
-            # 2. Verify with the firewall (raises FirewallBlockedException if unsafe)
+            # Verify with the firewall (raises FirewallBlockedException if unsafe)
+            # Note: `verify` will also run the modular ingress rules under the hood
             if text_to_scan:
                 firewall.verify(text_to_scan, session_id=session_id)
 
-            # 3. Proceed with normal execution if safe
             return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+import inspect
+
+def protect_tool(
+    firewall: AgentFirewall,
+    tool_name: str,
+    extract_args: Callable[..., dict] = None
+):
+    """
+    Decorator to protect a tool execution function. Runs TOOL_CALL rules.
+    """
+
+    def decorator(func: Callable) -> Callable:
+
+        def default_args_extractor(*args, **kwargs) -> dict:
+            # Bind arguments to the function signature to capture positional and keyword args
+            # accurately into a single dictionary
+            try:
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                return dict(bound_args.arguments)
+            except Exception:
+                # Fallback
+                if kwargs:
+                    return kwargs
+                if args and isinstance(args[0], dict):
+                    return args[0]
+                return {}
+
+        extractor = extract_args if extract_args else default_args_extractor
+
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            tool_args = extractor(*args, **kwargs)
+
+            # Evaluate tool call rules (raises exception if blocked)
+            firewall.evaluate_tool_call(tool_name, tool_args)
+
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def protect_egress(
+    firewall: AgentFirewall,
+    extract_output: Callable[[Any], Any] = None
+):
+    """
+    Decorator to protect agent output. Runs EGRESS rules and redacts output if necessary.
+    """
+    def default_extractor(result: Any) -> Any:
+        return result
+
+    extractor = extract_output if extract_output else default_extractor
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            # 1. Run the actual agent function
+            result = func(*args, **kwargs)
+
+            # 2. Extract the string/payload to scan
+            payload_to_scan = extractor(result)
+
+            # 3. Evaluate EGRESS rules
+            if payload_to_scan is not None:
+                modified_payload = firewall.evaluate_egress(payload_to_scan)
+
+                # If a custom extractor was used, we can't easily inject the modified string back
+                # into a complex object dynamically. But for simple string outputs, we can return it.
+                if isinstance(result, str):
+                    return modified_payload
+
+            return result
         return wrapper
     return decorator

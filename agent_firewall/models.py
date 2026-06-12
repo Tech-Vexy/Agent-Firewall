@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Any, Optional
+from enum import Enum
+import abc
 
 class Intent(BaseModel):
     """Represents a category of behavior or goal, often malicious, that the firewall should monitor."""
@@ -24,6 +26,43 @@ class SessionMemory(BaseModel):
         # Prevent unbound memory growth by keeping only last 10 interactions
         if len(self.history) > 10:
             self.history = self.history[-10:]
+
+class RuleAction(str, Enum):
+    ALLOW = "ALLOW"
+    BLOCK = "BLOCK"
+    REDACT = "REDACT"
+    FLAG = "FLAG"
+
+class RulePhase(str, Enum):
+    INGRESS = "INGRESS"
+    TOOL_CALL = "TOOL_CALL"
+    EGRESS = "EGRESS"
+
+class RuleResult(BaseModel):
+    action: RuleAction
+    reason: Optional[str] = None
+    modified_payload: Optional[Any] = None
+
+class FirewallRule(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def id(self) -> str:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def phase(self) -> RulePhase:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def description(self) -> str:
+        pass
+
+    @abc.abstractmethod
+    def evaluate(self, payload: Any, context: Optional[dict] = None) -> RuleResult:
+        pass
+
 
 class Policy(BaseModel):
     """A collection of intents that a firewall instance uses to scan."""

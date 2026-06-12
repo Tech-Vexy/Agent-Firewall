@@ -8,9 +8,22 @@ class Intent(BaseModel):
 
 class ScanResult(BaseModel):
     """The result of an LLM scan of input/code."""
-    is_safe: bool = Field(..., description="True if the input is safe, False if a malicious intent was detected.")
+    is_safe: bool = Field(..., description="True if the input is safe, False if a malicious intent or predictive threat was detected.")
     intent_detected: str | None = Field(None, description="The name of the detected malicious intent, if any.")
+    is_predictive_threat: bool = Field(False, description="True if the input is flagged as a zero-day or multi-step predictive anomaly.")
+    risk_score: float | None = Field(None, description="A score from 0.0 to 1.0 indicating the likelihood of a threat based on context and history.")
     reason: str | None = Field(None, description="The reason provided by the scanner for the detection.")
+
+class SessionMemory(BaseModel):
+    """Maintains a history of inputs and their scan results for predictive analysis."""
+    session_id: str
+    history: List[dict] = Field(default_factory=list, description="A list containing previous inputs and their scan results.")
+
+    def add_record(self, input_data: str, result: ScanResult):
+        self.history.append({"input": input_data, "result": result.model_dump()})
+        # Prevent unbound memory growth by keeping only last 10 interactions
+        if len(self.history) > 10:
+            self.history = self.history[-10:]
 
 class Policy(BaseModel):
     """A collection of intents that a firewall instance uses to scan."""

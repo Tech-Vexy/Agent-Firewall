@@ -54,15 +54,15 @@ firewall = AgentFirewall(
     fail_closed=True
 )
 
+from fastapi.responses import JSONResponse
+
 # Exception handler for when the firewall blocks an action
 @app.exception_handler(FirewallBlockedException)
 async def firewall_blocked_exception_handler(request: Request, exc: FirewallBlockedException):
     return JSONResponse(
         status_code=403,
-        content={"error": "Blocked by Firewall", "intent": exc.intent, "reason": exc.reason},
+        content={"detail": {"intent": exc.intent, "reason": exc.reason}},
     )
-
-from fastapi.responses import JSONResponse
 
 # --- Models ---
 
@@ -100,12 +100,10 @@ async def scan_ingress(request: IngressRequest):
     Evaluates modular ingress rules followed by the LLM predictive scanner.
     Raises a 403 Forbidden if a threat is detected.
     """
-    try:
-        # Run the full analyzer which includes Ingress rules, LLM intent, and predictive scanning
-        firewall.verify(request.prompt, session_id=request.session_id)
-        return IngressResponse(action="ALLOW", message="Prompt is safe.")
-    except FirewallBlockedException as e:
-        raise HTTPException(status_code=403, detail={"intent": e.intent, "reason": e.reason})
+    # Run the full analyzer which includes Ingress rules, LLM intent, and predictive scanning
+    # If blocked, the global exception handler will catch FirewallBlockedException
+    firewall.verify(request.prompt, session_id=request.session_id)
+    return IngressResponse(action="ALLOW", message="Prompt is safe.")
 
 @app.post("/scan/tool", response_model=ToolCallResponse)
 async def scan_tool(request: ToolCallRequest):
@@ -113,11 +111,9 @@ async def scan_tool(request: ToolCallRequest):
     Scans a tool execution request (e.g., shell command, network fetch).
     Raises a 403 Forbidden if the action is deemed destructive or unauthorized.
     """
-    try:
-        firewall.evaluate_tool_call(request.tool_name, request.args)
-        return ToolCallResponse(action="ALLOW", message="Tool execution is safe.")
-    except FirewallBlockedException as e:
-        raise HTTPException(status_code=403, detail={"intent": e.intent, "reason": e.reason})
+    # If blocked, the global exception handler will catch FirewallBlockedException
+    firewall.evaluate_tool_call(request.tool_name, request.args)
+    return ToolCallResponse(action="ALLOW", message="Tool execution is safe.")
 
 @app.post("/scan/egress", response_model=EgressResponse)
 async def scan_egress(request: EgressRequest):
@@ -125,14 +121,12 @@ async def scan_egress(request: EgressRequest):
     Scans the final output from the AI agent before returning it to the user.
     Redacts PII and secrets.
     """
-    try:
-        modified_payload = firewall.evaluate_egress(request.payload)
-        return EgressResponse(
-            action="ALLOW",
-            modified_payload=modified_payload
-        )
-    except FirewallBlockedException as e:
-        raise HTTPException(status_code=403, detail={"intent": e.intent, "reason": e.reason})
+    # If blocked, the global exception handler will catch FirewallBlockedException
+    modified_payload = firewall.evaluate_egress(request.payload)
+    return EgressResponse(
+        action="ALLOW",
+        modified_payload=modified_payload
+    )
 
 @app.get("/health")
 async def health_check():

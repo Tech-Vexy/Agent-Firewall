@@ -10,6 +10,38 @@ def mock_scanner(mocker):
     mocker.patch.object(scanner, 'scan', return_value=ScanResult(is_safe=True))
     return scanner
 
+def test_protect_ingress_fallback_extractor(mock_scanner):
+    """Test the fallback mechanism of default_extractor in protect_ingress."""
+    firewall = AgentFirewall(scanner=mock_scanner)
+    firewall.verify = MagicMock()
+
+    from agent_firewall import protect_ingress
+
+    @protect_ingress(firewall=firewall)
+    def dummy_agent(*args, **kwargs):
+        return "ok"
+
+    # Test kwarg 'prompt'
+    dummy_agent(prompt="test prompt")
+    firewall.verify.assert_called_with("test prompt", session_id=None)
+
+    # Test kwarg 'input'
+    dummy_agent(input="test input")
+    firewall.verify.assert_called_with("test input", session_id=None)
+
+    # Test kwarg 'code'
+    dummy_agent(code="test code")
+    firewall.verify.assert_called_with("test code", session_id=None)
+
+    # Test positional arg fallback
+    dummy_agent("generic positional arg")
+    firewall.verify.assert_called_with("generic positional arg", session_id=None)
+
+    # Test no args (should return empty string and not call verify)
+    firewall.verify.reset_mock()
+    dummy_agent()
+    firewall.verify.assert_not_called()
+
 def test_protect_tool_fallback_extractor(mock_scanner):
     """Test the fallback mechanism of default_args_extractor when inspect.signature fails."""
     firewall = AgentFirewall(scanner=mock_scanner)

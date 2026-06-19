@@ -40,6 +40,26 @@ class AgentFirewall:
         """Add a modular rule to the firewall."""
         self.rules.append(rule)
 
+    def _handle_block_action(self, result: Any, current_payload: Any, rule: FirewallRule):
+        if self.on_threat_detected:
+            self.on_threat_detected(result, current_payload)
+        raise FirewallBlockedException(
+            intent=rule.id,
+            reason=result.reason or f"Blocked by rule: {rule.id}"
+        )
+
+    def _handle_redact_action(self, result: Any, current_payload: Any) -> Any:
+        if result.modified_payload is not None:
+            current_payload = result.modified_payload
+        if self.on_threat_detected:
+            # Treat redact as a threat flag/event
+            self.on_threat_detected(result, current_payload)
+        return current_payload
+
+    def _handle_flag_action(self, result: Any, current_payload: Any):
+        if self.on_threat_detected:
+            self.on_threat_detected(result, current_payload)
+
     def _evaluate_rules(self, phase: RulePhase, payload: Any, context: Optional[dict] = None) -> Any:
         """
         Evaluates all rules for a specific phase.
@@ -53,23 +73,11 @@ class AgentFirewall:
             result = rule.evaluate(current_payload, context)
 
             if result.action == RuleAction.BLOCK:
-                if self.on_threat_detected:
-                    self.on_threat_detected(result, current_payload)
-                raise FirewallBlockedException(
-                    intent=rule.id,
-                    reason=result.reason or f"Blocked by rule: {rule.id}"
-                )
-
+                self._handle_block_action(result, current_payload, rule)
             elif result.action == RuleAction.REDACT:
-                if result.modified_payload is not None:
-                    current_payload = result.modified_payload
-                if self.on_threat_detected:
-                    # Treat redact as a threat flag/event
-                    self.on_threat_detected(result, current_payload)
-
+                current_payload = self._handle_redact_action(result, current_payload)
             elif result.action == RuleAction.FLAG:
-                if self.on_threat_detected:
-                    self.on_threat_detected(result, current_payload)
+                self._handle_flag_action(result, current_payload)
 
         return current_payload
 
